@@ -19,6 +19,7 @@ jobs:
           mkdir -p src/main/java/com/gancho
           for d in items models/item textures/item lang; do mkdir -p src/main/resources/assets/gancho/$d; done
           mkdir -p src/main/resources/data/gancho/recipe
+          mkdir -p src/main/resources/data/minecraft/tags/item
 
           cat > settings.gradle <<'EOF'
           pluginManagement {
@@ -92,39 +93,40 @@ jobs:
           import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
           import net.fabricmc.fabric.api.event.player.UseItemCallback;
           import net.minecraft.core.Registry;
-          import net.minecraft.core.component.DataComponentType;
+          import net.minecraft.core.component.DataComponents;
           import net.minecraft.core.registries.BuiltInRegistries;
           import net.minecraft.core.registries.Registries;
-          import net.minecraft.network.codec.ByteBufCodecs;
           import net.minecraft.resources.Identifier;
           import net.minecraft.resources.ResourceKey;
           import net.minecraft.server.level.ServerLevel;
           import net.minecraft.server.level.ServerPlayer;
-          import net.minecraft.util.ExtraCodecs;
           import net.minecraft.world.InteractionResult;
           import net.minecraft.world.item.CreativeModeTabs;
-          import net.minecraft.world.item.CrossbowItem;
           import net.minecraft.world.item.Item;
           import net.minecraft.world.item.ItemStack;
           import net.minecraft.world.item.Items;
+          import net.minecraft.world.item.component.ChargedProjectiles;
 
           public class GanchoMod implements ModInitializer {
               public static final String MOD_ID = "gancho";
+
+              /** Alcance (en bloques) del gancho con 1 a 8 cuerdas. */
+              public static final int[] RANGES = {20, 40, 60, 100, 120, 140, 160, 200};
 
               public static Identifier id(String path) {
                   return Identifier.fromNamespaceAndPath(MOD_ID, path);
               }
 
-              public static final DataComponentType<Integer> GRAPPLE_RANGE = Registry.register(
-                      BuiltInRegistries.DATA_COMPONENT_TYPE,
-                      id("grapple_range"),
-                      DataComponentType.<Integer>builder()
-                              .persistent(ExtraCodecs.POSITIVE_INT)
-                              .networkSynchronized(ByteBufCodecs.VAR_INT)
-                              .build());
-
               public static final Item GRAPPLING_HOOK = registerItem("grappling_hook");
-              public static final Item ROPED_HOOK = registerItem("roped_hook");
+              public static final Item[] ROPED_HOOKS = createRopedHooks();
+
+              private static Item[] createRopedHooks() {
+                  Item[] items = new Item[RANGES.length];
+                  for (int i = 0; i < items.length; i++) {
+                      items[i] = registerItem("roped_hook_" + (i + 1));
+                  }
+                  return items;
+              }
 
               private static Item registerItem(String name) {
                   ResourceKey<Item> key = ResourceKey.create(Registries.ITEM, id(name));
@@ -132,22 +134,34 @@ jobs:
                   return Registry.register(BuiltInRegistries.ITEM, key, item);
               }
 
+              /** Devuelve qué gancho con cuerda tiene cargada la ballesta, o -1 si ninguno. */
+              public static int hookIndex(ChargedProjectiles charged) {
+                  for (int i = 0; i < ROPED_HOOKS.length; i++) {
+                      if (charged.contains(ROPED_HOOKS[i])) return i;
+                  }
+                  return -1;
+              }
+
               @Override
               public void onInitialize() {
-                  Registry.register(BuiltInRegistries.RECIPE_SERIALIZER,
-                          id("crafting_hook_crossbow"), HookCrossbowRecipe.SERIALIZER);
-
                   CreativeModeTabEvents.modifyOutputEvent(CreativeModeTabs.TOOLS_AND_UTILITIES)
                           .register(output -> output.accept(GRAPPLING_HOOK));
 
                   UseItemCallback.EVENT.register((player, level, hand) -> {
                       ItemStack stack = player.getItemInHand(hand);
-                      Integer range = stack.get(GRAPPLE_RANGE);
-                      if (range == null || !stack.is(Items.CROSSBOW) || !CrossbowItem.isCharged(stack)) {
+                      if (!stack.is(Items.CROSSBOW)) {
+                          return InteractionResult.PASS;
+                      }
+                      ChargedProjectiles charged = stack.get(DataComponents.CHARGED_PROJECTILES);
+                      if (charged == null || charged.isEmpty()) {
+                          return InteractionResult.PASS;
+                      }
+                      int index = hookIndex(charged);
+                      if (index < 0) {
                           return InteractionResult.PASS;
                       }
                       if (level instanceof ServerLevel serverLevel && player instanceof ServerPlayer serverPlayer) {
-                          GrappleManager.fire(serverPlayer, serverLevel, stack, hand, range);
+                          GrappleManager.fire(serverPlayer, serverLevel, stack, hand, RANGES[index], ROPED_HOOKS[index]);
                       }
                       return InteractionResult.SUCCESS;
                   });
@@ -175,6 +189,7 @@ jobs:
           import net.minecraft.sounds.SoundSource;
           import net.minecraft.world.InteractionHand;
           import net.minecraft.world.entity.EquipmentSlot;
+          import net.minecraft.world.item.Item;
           import net.minecraft.world.item.ItemStack;
           import net.minecraft.world.item.component.ChargedProjectiles;
           import net.minecraft.world.level.ClipContext;
@@ -199,7 +214,8 @@ jobs:
 
               private GrappleManager() {}
 
-              public static void fire(ServerPlayer player, ServerLevel level, ItemStack crossbow, InteractionHand hand, int range) {
+              public static void fire(ServerPlayer player, ServerLevel level, ItemStack crossbow,
+                                      InteractionHand hand, int range, Item hookItem) {
                   Vec3 start = player.getEyePosition();
                   Vec3 end = start.add(player.getLookAngle().scale(range));
                   BlockHitResult hit = level.clip(new ClipContext(start, end,
@@ -214,7 +230,14 @@ jobs:
 
                   Vec3 target = hit.getLocation();
 
+                  // El gancho sale de la ballesta y se devuelve al jugador
                   crossbow.set(DataComponents.CHARGED_PROJECTILES, ChargedProjectiles.EMPTY);
+                  if (!player.isCreative()) {
+                      ItemStack back = new ItemStack(hookItem);
+                      if (!player.getInventory().add(back)) {
+                          player.drop(back, false);
+                      }
+                  }
                   crossbow.hurtAndBreak(1, player,
                           hand == InteractionHand.MAIN_HAND ? EquipmentSlot.MAINHAND : EquipmentSlot.OFFHAND);
 
@@ -267,79 +290,6 @@ jobs:
           }
           EOF
 
-          cat > src/main/java/com/gancho/HookCrossbowRecipe.java <<'EOF'
-          package com.gancho;
-
-          import com.mojang.serialization.MapCodec;
-          import net.minecraft.ChatFormatting;
-          import net.minecraft.core.component.DataComponents;
-          import net.minecraft.network.RegistryFriendlyByteBuf;
-          import net.minecraft.network.chat.Component;
-          import net.minecraft.network.codec.StreamCodec;
-          import net.minecraft.world.item.ItemStack;
-          import net.minecraft.world.item.Items;
-          import net.minecraft.world.item.component.ItemLore;
-          import net.minecraft.world.item.crafting.CraftingInput;
-          import net.minecraft.world.item.crafting.CustomRecipe;
-          import net.minecraft.world.item.crafting.RecipeSerializer;
-          import net.minecraft.world.level.Level;
-
-          import java.util.List;
-
-          public class HookCrossbowRecipe extends CustomRecipe {
-              public static final HookCrossbowRecipe INSTANCE = new HookCrossbowRecipe();
-              public static final MapCodec<HookCrossbowRecipe> CODEC = MapCodec.unit(INSTANCE);
-              public static final StreamCodec<RegistryFriendlyByteBuf, HookCrossbowRecipe> STREAM_CODEC = StreamCodec.unit(INSTANCE);
-              public static final RecipeSerializer<HookCrossbowRecipe> SERIALIZER = new RecipeSerializer<>(CODEC, STREAM_CODEC);
-
-              @Override
-              public boolean matches(CraftingInput input, Level level) {
-                  int crossbows = 0;
-                  int hooks = 0;
-                  for (int i = 0; i < input.size(); i++) {
-                      ItemStack s = input.getItem(i);
-                      if (s.isEmpty()) continue;
-                      if (s.is(Items.CROSSBOW)) {
-                          crossbows++;
-                      } else if (s.is(GanchoMod.ROPED_HOOK) && s.get(GanchoMod.GRAPPLE_RANGE) != null) {
-                          hooks++;
-                      } else {
-                          return false;
-                      }
-                  }
-                  return crossbows == 1 && hooks == 1;
-              }
-
-              @Override
-              public ItemStack assemble(CraftingInput input) {
-                  ItemStack crossbow = ItemStack.EMPTY;
-                  int range = 0;
-                  for (int i = 0; i < input.size(); i++) {
-                      ItemStack s = input.getItem(i);
-                      if (s.is(Items.CROSSBOW)) {
-                          crossbow = s;
-                      } else if (s.is(GanchoMod.ROPED_HOOK)) {
-                          Integer r = s.get(GanchoMod.GRAPPLE_RANGE);
-                          if (r != null) range = r;
-                      }
-                  }
-                  ItemStack result = crossbow.copy();
-                  result.setCount(1);
-                  result.set(GanchoMod.GRAPPLE_RANGE, range);
-                  result.set(DataComponents.LORE, new ItemLore(List.of(
-                          Component.translatable("tooltip.gancho.equipped", range)
-                                  .withStyle(ChatFormatting.GRAY)
-                                  .withStyle(style -> style.withItalic(false)))));
-                  return result;
-              }
-
-              @Override
-              public RecipeSerializer<? extends CustomRecipe> getSerializer() {
-                  return SERIALIZER;
-              }
-          }
-          EOF
-
           cat > src/main/resources/data/gancho/recipe/grappling_hook.json <<'EOF'
           {
             "type": "minecraft:crafting_shaped",
@@ -350,42 +300,43 @@ jobs:
           }
           EOF
 
-          cat > src/main/resources/data/gancho/recipe/hook_crossbow.json <<'EOF'
-          { "type": "gancho:crafting_hook_crossbow" }
-          EOF
-
           python3 - <<'EOF'
           import json, zlib, struct
           ranges = [20, 40, 60, 100, 120, 140, 160, 200]
+
+          # Recetas: gancho + N cuerdas
           for n, r in enumerate(ranges, start=1):
               d = {"type": "minecraft:crafting_shapeless", "category": "equipment",
                    "ingredients": ["gancho:grappling_hook"] + ["minecraft:string"] * n,
-                   "result": {"id": "gancho:roped_hook", "count": 1, "components": {
-                       "gancho:grapple_range": r,
-                       "minecraft:lore": [{"translate": "tooltip.gancho.range", "with": [str(r)], "color": "gray", "italic": False}]}}}
+                   "result": {"id": f"gancho:roped_hook_{n}", "count": 1}}
               json.dump(d, open(f"src/main/resources/data/gancho/recipe/roped_hook_{n}.json", "w"), indent=2)
 
-          for n in ["grappling_hook", "roped_hook"]:
-              json.dump({"model": {"type": "minecraft:model", "model": f"gancho:item/{n}"}},
-                        open(f"src/main/resources/assets/gancho/items/{n}.json", "w"))
-              json.dump({"parent": "minecraft:item/generated", "textures": {"layer0": f"gancho:item/{n}"}},
-                        open(f"src/main/resources/assets/gancho/models/item/{n}.json", "w"))
+          # Los ganchos con cuerda cuentan como flechas para la ballesta
+          json.dump({"values": [f"gancho:roped_hook_{n}" for n in range(1, 9)]},
+                    open("src/main/resources/data/minecraft/tags/item/arrows.json", "w"), indent=2)
 
-          lang_es = {
-              "item.gancho.grappling_hook": "Gancho",
-              "item.gancho.roped_hook": "Gancho con cuerda",
-              "tooltip.gancho.range": "Alcance: %s bloques",
-              "tooltip.gancho.equipped": "Gancho equipado - alcance: %s bloques",
-              "message.gancho.no_target": "No hay ninguna superficie a menos de %s bloques"}
-          lang_en = {
-              "item.gancho.grappling_hook": "Grappling Hook",
-              "item.gancho.roped_hook": "Roped Grappling Hook",
-              "tooltip.gancho.range": "Range: %s blocks",
-              "tooltip.gancho.equipped": "Grappling hook equipped - range: %s blocks",
-              "message.gancho.no_target": "No surface within %s blocks"}
+          # Modelos de ítem
+          def model(item, tex):
+              json.dump({"model": {"type": "minecraft:model", "model": f"gancho:item/{item}"}},
+                        open(f"src/main/resources/assets/gancho/items/{item}.json", "w"))
+              json.dump({"parent": "minecraft:item/generated", "textures": {"layer0": f"gancho:item/{tex}"}},
+                        open(f"src/main/resources/assets/gancho/models/item/{item}.json", "w"))
+          model("grappling_hook", "grappling_hook")
+          for n in range(1, 9):
+              model(f"roped_hook_{n}", "roped_hook")
+
+          # Textos
+          lang_es = {"item.gancho.grappling_hook": "Gancho",
+                     "message.gancho.no_target": "No hay ninguna superficie a menos de %s bloques"}
+          lang_en = {"item.gancho.grappling_hook": "Grappling Hook",
+                     "message.gancho.no_target": "No surface within %s blocks"}
+          for n, r in enumerate(ranges, start=1):
+              lang_es[f"item.gancho.roped_hook_{n}"] = f"Gancho con {n} cuerda{'s' if n > 1 else ''} ({r} bloques)"
+              lang_en[f"item.gancho.roped_hook_{n}"] = f"Grappling Hook with {n} rope{'s' if n > 1 else ''} ({r} blocks)"
           for name, data in [("es_es", lang_es), ("es_mx", lang_es), ("en_us", lang_en)]:
               json.dump(data, open(f"src/main/resources/assets/gancho/lang/{name}.json", "w"), ensure_ascii=False, indent=2)
 
+          # Texturas 16x16
           def png(path, px):
               raw = b''
               for y in range(16):
