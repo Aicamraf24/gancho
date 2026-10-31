@@ -79,3 +79,44 @@ jobs:
               "fabricloader": ">=0.18.5",
               "minecraft": "~26.1.2",
               "java": ">=25",
+
+            "fabric-api": "*"
+            }
+          }
+          EOF
+
+          cat > src/main/java/com/gancho/GanchoMod.java <<'EOF'
+          package com.gancho;
+
+          import net.fabricmc.api.ModInitializer;
+          import net.fabricmc.fabric.api.creativetab.v1.CreativeModeTabEvents;
+          import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+          import net.fabricmc.fabric.api.event.player.UseItemCallback;
+          import net.minecraft.core.Registry;
+          import net.minecraft.core.component.DataComponentType;
+          import net.minecraft.core.registries.BuiltInRegistries;
+          import net.minecraft.core.registries.Registries;
+          import net.minecraft.network.codec.ByteBufCodecs;
+          import net.minecraft.resources.Identifier;
+          import net.minecraft.resources.ResourceKey;
+          import net.minecraft.server.level.ServerLevel;
+          import net.minecraft.server.level.ServerPlayer;
+          import net.minecraft.util.ExtraCodecs;
+          import net.minecraft.world.InteractionResult;
+          import net.minecraft.world.item.CreativeModeTabs;
+          import net.minecraft.world.item.CrossbowItem;
+          import net.minecraft.world.item.Item;
+          import net.minecraft.world.item.ItemStack;
+          import net.minecraft.world.item.Items;
+
+          public class GanchoMod implements ModInitializer {
+              public static final String MOD_ID = "gancho";
+
+              public static Identifier id(String path) {
+                  return Identifier.fromNamespaceAndPath(MOD_ID, path);
+              }
+
+              public static final DataComponentType<Integer> GRAPPLE_RANGE = Registry.register(
+                      BuiltInRegistries.DATA_COMPONENT_TYPE,
+                      id("grapple_range"),
+                      DataComponentType.<Integer>builder()
