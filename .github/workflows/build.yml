@@ -110,7 +110,7 @@ jobs:
           public class GanchoMod implements ModInitializer {
               public static final String MOD_ID = "gancho";
 
-              /** Alcance (en bloques) del gancho con 1 a 8 cuerdas. */
+              /** Alcance (en bloques) del gancho con 1 a 8 riendas. */
               public static final int[] RANGES = {20, 40, 60, 100, 120, 140, 160, 200};
 
               public static Identifier id(String path) {
@@ -134,7 +134,7 @@ jobs:
                   return Registry.register(BuiltInRegistries.ITEM, key, item);
               }
 
-              /** Devuelve qué gancho con cuerda tiene cargada la ballesta, o -1 si ninguno. */
+              /** Devuelve qué gancho con riendas tiene cargada la ballesta, o -1 si ninguno. */
               public static int hookIndex(ChargedProjectiles charged) {
                   for (int i = 0; i < ROPED_HOOKS.length; i++) {
                       if (charged.contains(ROPED_HOOKS[i])) return i;
@@ -304,14 +304,14 @@ jobs:
           import json, zlib, struct
           ranges = [20, 40, 60, 100, 120, 140, 160, 200]
 
-          # Recetas: gancho + N cuerdas
+          # Recetas: gancho + N riendas (minecraft:lead)
           for n, r in enumerate(ranges, start=1):
               d = {"type": "minecraft:crafting_shapeless", "category": "equipment",
-                   "ingredients": ["gancho:grappling_hook"] + ["minecraft:string"] * n,
+                   "ingredients": ["gancho:grappling_hook"] + ["minecraft:lead"] * n,
                    "result": {"id": f"gancho:roped_hook_{n}", "count": 1}}
               json.dump(d, open(f"src/main/resources/data/gancho/recipe/roped_hook_{n}.json", "w"), indent=2)
 
-          # Los ganchos con cuerda cuentan como flechas para la ballesta
+          # Los ganchos con riendas cuentan como flechas para la ballesta
           json.dump({"values": [f"gancho:roped_hook_{n}" for n in range(1, 9)]},
                     open("src/main/resources/data/minecraft/tags/item/arrows.json", "w"), indent=2)
 
@@ -331,8 +331,8 @@ jobs:
           lang_en = {"item.gancho.grappling_hook": "Grappling Hook",
                      "message.gancho.no_target": "No surface within %s blocks"}
           for n, r in enumerate(ranges, start=1):
-              lang_es[f"item.gancho.roped_hook_{n}"] = f"Gancho con {n} cuerda{'s' if n > 1 else ''} ({r} bloques)"
-              lang_en[f"item.gancho.roped_hook_{n}"] = f"Grappling Hook with {n} rope{'s' if n > 1 else ''} ({r} blocks)"
+              lang_es[f"item.gancho.roped_hook_{n}"] = f"Gancho con {n} rienda{'s' if n > 1 else ''} ({r} bloques)"
+              lang_en[f"item.gancho.roped_hook_{n}"] = f"Grappling Hook with {n} lead{'s' if n > 1 else ''} ({r} blocks)"
           for name, data in [("es_es", lang_es), ("es_mx", lang_es), ("en_us", lang_en)]:
               json.dump(data, open(f"src/main/resources/assets/gancho/lang/{name}.json", "w"), ensure_ascii=False, indent=2)
 
